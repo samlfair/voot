@@ -1,0 +1,21 @@
+{
+  "name": "voot",
+  "version": "0.0.3",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/samlfair/vowel.git"
+  },
+  "main": "index.js",
+  "license": "MIT",
+  "author": "Sam Littlefair",
+  "homepage": "https://github.com/samlfair/vowel#readme",
+  "scripts": {
+    "test": "node --test --watch tests/*.js",
+    "coverage": "node --test --experimental-test-coverage --watch tests/*.js"
+  },
+  "dependencies": {
+    "chokidar": "^5.0.0",
+    "faye-websocket": "^0.11.4"
+  }
+}
