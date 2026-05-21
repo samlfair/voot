@@ -1,55 +1,50 @@
-function clientScript() {
-  const clientScript = `
-  <script>
-    function openSocket() {
-      console.log("Socket opened")
-      const socket = new WebSocket('ws://localhost:8000');
-      socket.addEventListener('open', () => {
-        socket.send('opened')
-
-      });
+export default function openSocket() {
+  console.info("Socket opened")
+  const socket = new WebSocket('ws://localhost:8000');
+  socket.addEventListener('open', () => {
+    socket.send('opened')
+  });
 
 
-      socket.addEventListener("close", () => {
-        console.log("Socket closed")
-        socket.close()
-        setTimeout(() => {
-          console.log("socket closed refresh")
+  socket.addEventListener("close", () => {
+    console.info("Socket closed")
+    socket.close()
+    setTimeout(() => {
+      console.info("socket closed refresh")
+      location.reload()
+
+    }, 1000)
+  })
+
+  function isOpen() {
+    return socket.readyState === 1
+  }
+
+  socket.addEventListener('message', e => {
+    const data = JSON.parse(e.data)
+    console.log(data)
+    if (data.message === "filechange" && isOpen()) {
+      if (data.payload) {
+        const regex = new RegExp(window.location.pathname + "(index)?(\.html)")
+        if (!data.payload.path.match(regex)) return
+
+        const parser = new DOMParser()
+        const oldHead = parser.parseFromString(document.documentElement.outerHTML, "text/html").head.innerHTML
+        const newHead = parser.parseFromString(data.payload.data, "text/html").head.innerHTML
+
+        // if (false) {
+          if(oldHead !== newHead) {
           location.reload()
-
-        }, 1000)
-      })
-
-      function isOpen() {
-        return socket.readyState === 1
-      }
-
-      socket.addEventListener('message', e => {
-        const data = JSON.parse(e.data)
-        if(data.message === "refresh" && isOpen()) {
-          if(data.payload) {
-            const regex = new RegExp(window.location.pathname + "(index)?(\.html)")
-            if(!data.payload.path.match(regex)) return
-            const body = document.querySelector("body")
-            const newBody = document.createElement("body")
-            const content = data.payload.data.match(/<body.*?>([\\s\\S]*)<.body>/)
-            newBody.innerHTML = content[1]
-            body.replaceChildren(...newBody.children)
-          } else {
-            location.reload()
-          }
-        } else if(data.message === "styles" && isOpen()) {
-          const stylesheet = document.querySelector("link[href*='styles.css']")
-          stylesheet.setAttribute("href", "/styles.css?" + Date.now())
+        } else {
+          const body = document.querySelector("body")
+          const newBody = document.createElement("body")
+          const content = data.payload.data.match(/<body.*?>([\\s\\S]*)/)
+          newBody.innerHTML = content[1]
+          body.replaceWith(newBody)
         }
-      });
+      } else {
+        location.reload()
+      }
     }
-
-    openSocket()
-  </script>`
-
-  return clientScript
+  });
 }
-
-export default clientScript
-
