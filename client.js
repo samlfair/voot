@@ -22,7 +22,6 @@ export default function openSocket() {
 
   socket.addEventListener('message', e => {
     const data = JSON.parse(e.data)
-    console.log(data)
     if (data.message === "filechange" && isOpen()) {
       if (data.payload) {
         const regex = new RegExp(window.location.pathname + "(index)?(\.html)")

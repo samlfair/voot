@@ -21,7 +21,11 @@ function parseURL(url) {
   try {
     return new URL(url)
   } catch (e) {
-    return new URL(url, "thismessage:/")
+    try {
+      return new URL(url, "thismessage:/")
+    } catch (e) {
+      console.error(e)
+    }
   }
 }
 
@@ -48,7 +52,7 @@ function route(url) {
 // async function startServer({ inputDir, cacheDir, plugins, database, outputDir }) {
 async function startServer(config) {
 
-  const queue = await votive(config)
+  const queue = await votive({ ...config, verbose: config.logging === "verbose" })
 
   const { sourceFolder, destinationFolder } = config
   const server = http.createServer(async (req, res) => {
@@ -92,8 +96,11 @@ async function startServer(config) {
             const stats = await stat(dir)
             if (stats.isFile) throw new Error()
           } catch (e) {
-            await mkdir(dir, { recursive: true })
-
+            try {
+              await mkdir(dir, { recursive: true })
+            } catch (e) {
+              console.error(e)
+            }
           }
         }
 
@@ -160,7 +167,7 @@ async function startServer(config) {
   });
 
   server.listen(8000, () => {
-    console.info(`${styleText("dim", "Vowel:")} ${styleText("blue", "http://localhost:8000")}`);
+    if(config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
   });
 
   let ws
@@ -171,14 +178,14 @@ async function startServer(config) {
     if (WebSocket.isWebSocket(req)) {
       ws.on('message', (e) => {
         if (e.data = "opened") {
-          console.info(`${styleText("dim", "client:")} ${styleText("cyan", "connection opened")}`)
+          if (config.logging === "verbose") console.info(`${styleText("dim", "preview: ")} ${styleText("cyan", "connection opened")}`)
         } else {
           ws.send("Message received")
         }
       })
 
       ws.on('close', (e) => {
-        console.info(`${styleText("dim", "client:")} ${styleText("cyan", "connection closed")}`)
+        if (config.logging === "verbose") console.info(`${styleText("dim", "preview: ")} ${styleText("cyan", "connection closed")}`)
         ws = null
       })
     }
@@ -188,7 +195,7 @@ async function startServer(config) {
 
   chokidar.watch(destinationFolder, {})
     .on("change", async (filePath, stats) => {
-      console.info(`${styleText("dim", `change:`)} ${styleText("blue", filePath)}`)
+      if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", "change" + filePath)}`)
       const file = await readFile(filePath, "utf-8")
       const destinationPath = (new URL(filePath, "thismessage:/")).pathname
       if (ws) ws.send(JSON.stringify({ message: "filechange", payload: { path: destinationPath, data: file } }))
@@ -201,16 +208,20 @@ async function startServer(config) {
         || path.match(/^\.\w/)
     }
   }).on('all', async (event, filePath) => {
-    console.info(`${styleText("dim", `${event}:`)} ${styleText("yellow", filePath)}`)
+    if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", event + " " + filePath)}`)
     const source = cache.source.get(filePath)
     // TODO: Read all updated files
     if (source && source.destination) {
       const { ext } = path.parse(source.path)
       if (ext === ".md" || ext === ".css") {
-        cache = await queue()
-        const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
-        const filePath = (new URL(source.destination, "thismessage:/")).pathname
-        // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
+        try {
+          cache = await queue()
+          const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
+          const filePath = (new URL(source.destination, "thismessage:/")).pathname
+          if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
+        } catch (e) {
+          console.error(e)
+        }
       }
     }
   });
