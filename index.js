@@ -12,6 +12,8 @@ import { writeFileSync } from "node:fs"
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
 
+console.log("running")
+
 
 import clientScript from "./client.js"
 
@@ -211,11 +213,11 @@ async function startServer(config) {
     if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", event + " " + filePath)}`)
     const source = cache.source.get(filePath)
     // TODO: Read all updated files
+    cache = await queue()
     if (source && source.destination) {
       const { ext } = path.parse(source.path)
       if (ext === ".md" || ext === ".css") {
         try {
-          cache = await queue()
           const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
           const filePath = (new URL(source.destination, "thismessage:/")).pathname
           if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
