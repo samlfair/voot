@@ -24,7 +24,7 @@ function parseURL(url) {
     try {
       return new URL(url, "thismessage:/")
     } catch (e) {
-      console.error(e)
+      null
     }
   }
 }
@@ -220,7 +220,7 @@ async function startServer(config) {
           const filePath = (new URL(source.destination, "thismessage:/")).pathname
           if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
         } catch (e) {
-          console.error(e)
+          // console.error(e)
         }
       }
     }
