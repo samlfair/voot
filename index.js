@@ -12,6 +12,8 @@ import { writeFileSync } from "node:fs"
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
 
+console.log("running")
+
 
 import clientScript from "./client.js"
 
@@ -213,6 +215,7 @@ async function startServer(config) {
     if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", event + " " + filePath)}`)
     const source = cache.source.get(filePath)
     // TODO: Read all updated files
+    cache = await queue()
     if (source && source.destination) {
       const { ext } = path.parse(source.path)
       if (ext === ".md" || ext === ".css") {
