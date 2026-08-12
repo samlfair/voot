@@ -213,12 +213,12 @@ async function startServer(config) {
     }
   }).on('all', async (event, filePath) => {
     if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", event + " " + filePath)}`)
-    const source = cache.source.get(filePath)
+    // const source = cache.source.get(filePath)
     // TODO: Read all updated files
     cache = await queue()
-    if (source && source.destination) {
-      const { ext } = path.parse(source.path)
-      if (ext === ".md" || ext === ".css") {
+    // if (source && source.destination) {
+      // const { ext } = path.parse(source.path)
+      // if (ext === ".md" || ext === ".css") {
         try {
           const { runBuffers, runFetches } = await queue()
           // const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
@@ -234,8 +234,8 @@ async function startServer(config) {
         } catch (e) {
           // console.error(e)
         }
-      }
-    }
+      // }
+    // }
   });
 }
 
