@@ -31,8 +31,7 @@ export default function openSocket() {
         const oldHead = parser.parseFromString(document.documentElement.outerHTML, "text/html").head.innerHTML
         const newHead = parser.parseFromString(data.payload.data, "text/html").head.innerHTML
 
-        // if (false) {
-          if(oldHead !== newHead) {
+        if (oldHead !== newHead) {
           location.reload()
         } else {
           const body = document.querySelector("body")

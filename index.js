@@ -53,6 +53,10 @@ function route(url) {
 async function startServer(config) {
 
   const queue = await votive({ ...config, verbose: config.logging === "verbose" })
+  let { cache, runBuffers, runFetches } = await queue()
+
+  if (runBuffers) runBuffers()
+  if (runFetches) runFetches()
 
   const { sourceFolder, destinationFolder } = config
   const server = http.createServer(async (req, res) => {
@@ -107,8 +111,6 @@ async function startServer(config) {
         const homePath = path.join(parsedPath, "home.md")
         await writeFile(homePath, `# ${formData.foldername}`, { encoding: "utf-8" })
       }
-
-      cache = await queue()
     }
 
 
@@ -166,8 +168,10 @@ async function startServer(config) {
     }
   });
 
+  await queue()
+
   server.listen(8000, () => {
-    if(config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
+    if (config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
   });
 
   let ws
@@ -191,11 +195,9 @@ async function startServer(config) {
     }
   })
 
-  cache = await queue()
-
   chokidar.watch(destinationFolder, {})
     .on("change", async (filePath, stats) => {
-      if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", "change" + filePath)}`)
+      if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", "change " + filePath)}`)
       const file = await readFile(filePath, "utf-8")
       const destinationPath = (new URL(filePath, "thismessage:/")).pathname
       if (ws) ws.send(JSON.stringify({ message: "filechange", payload: { path: destinationPath, data: file } }))
@@ -215,10 +217,17 @@ async function startServer(config) {
       const { ext } = path.parse(source.path)
       if (ext === ".md" || ext === ".css") {
         try {
-          cache = await queue()
-          const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
-          const filePath = (new URL(source.destination, "thismessage:/")).pathname
-          if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
+          const { runBuffers, runFetches } = await queue()
+          // const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
+          // const filePath = (new URL(source.destination, "thismessage:/")).pathname
+          // console.log("send refresh")
+          // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
+          if (runBuffers || runFetches) {
+            await Promise.allSettled([runBuffers && runBuffers(), runFetches && runFetches()])
+            // const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
+            // const filePath = (new URL(source.destination, "thismessage:/")).pathname
+            // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
+          }
         } catch (e) {
           // console.error(e)
         }
