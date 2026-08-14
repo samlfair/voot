@@ -216,19 +216,19 @@ async function startServer(config) {
     // const source = cache.source.get(filePath)
     // TODO: Read all updated files
     cache = await queue()
-    // if (source && source.destination) {
+    // if (source && source.target) {
       // const { ext } = path.parse(source.path)
       // if (ext === ".md" || ext === ".css") {
         try {
           const { runBuffers, runFetches } = await queue()
-          // const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
-          // const filePath = (new URL(source.destination, "thismessage:/")).pathname
+          // const file = await readFile(path.join(destinationFolder, source.target), "utf-8")
+          // const filePath = (new URL(source.target, "thismessage:/")).pathname
           // console.log("send refresh")
           // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
           if (runBuffers || runFetches) {
             await Promise.allSettled([runBuffers && runBuffers(), runFetches && runFetches()])
-            // const file = await readFile(path.join(destinationFolder, source.destination), "utf-8")
-            // const filePath = (new URL(source.destination, "thismessage:/")).pathname
+            // const file = await readFile(path.join(destinationFolder, source.target), "utf-8")
+            // const filePath = (new URL(source.target, "thismessage:/")).pathname
             // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
           }
         } catch (e) {
