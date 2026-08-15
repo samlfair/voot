@@ -51,14 +51,31 @@ function route(url) {
   return pathInfo
 }
 
+/*
+  runBuffers()/runFetches() do the slow part (analyzing a video, fetching
+  a URL) and then trigger their own rebuild once done - see wrapRunner in
+  votive/lib/bundle.js. That slow work never touches votive's build
+  queue, so firing it here and moving on immediately (not awaiting it)
+  never delays a foreground rebuild triggered by an unrelated file edit -
+  see tasks/voot-unawaited-deferred-race.md. Still fire-and-forget, so
+  errors need a .catch or a failed fetch/buffer would surface as an
+  unhandled rejection.
+*/
+function runDeferred(runner, config) {
+  if (!runner) return
+  runner().catch(e => {
+    if (config.logging !== "silent") console.error(e)
+  })
+}
+
 // async function startServer({ inputDir, cacheDir, plugins, database, outputDir }) {
 async function startServer(config) {
 
   const queue = await votive({ ...config, verbose: config.logging === "verbose" })
   let { cache, runBuffers, runFetches } = await queue()
 
-  if (runBuffers) runBuffers()
-  if (runFetches) runFetches()
+  runDeferred(runBuffers, config)
+  runDeferred(runFetches, config)
 
   const { sourceFolder, targetFolder } = config
   const server = http.createServer(async (req, res) => {
@@ -213,29 +230,18 @@ async function startServer(config) {
     }
   }).on('all', async (event, filePath) => {
     if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", event + " " + filePath)}`)
-    // const source = cache.source.get(filePath)
-    // TODO: Read all updated files
-    cache = await queue()
-    // if (source && source.target) {
-      // const { ext } = path.parse(source.path)
-      // if (ext === ".md" || ext === ".css") {
-        try {
-          const { runBuffers, runFetches } = await queue()
-          // const file = await readFile(path.join(targetFolder, source.target), "utf-8")
-          // const filePath = (new URL(source.target, "thismessage:/")).pathname
-          // console.log("send refresh")
-          // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
-          if (runBuffers || runFetches) {
-            await Promise.allSettled([runBuffers && runBuffers(), runFetches && runFetches()])
-            // const file = await readFile(path.join(targetFolder, source.target), "utf-8")
-            // const filePath = (new URL(source.target, "thismessage:/")).pathname
-            // if (ws) ws.send(JSON.stringify({ message: "refresh", payload: { path: filePath, data: file } }))
-          }
-        } catch (e) {
-          // console.error(e)
-        }
-      // }
-    // }
+
+    // Awaited: this is the foreground rebuild for the file that just
+    // changed, and the whole point is to write its output promptly.
+    const result = await queue()
+    cache = result.cache
+
+    // Not awaited: any buffer/fetch work this edit turned up (e.g. a
+    // newly-added video, a bare URL) must not delay the *next* edit's
+    // own queue() call - see runDeferred above and
+    // tasks/voot-unawaited-deferred-race.md.
+    runDeferred(result.runBuffers, config)
+    runDeferred(result.runFetches, config)
   });
 }
 
