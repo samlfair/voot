@@ -5,7 +5,7 @@ import startServer from "./index.js"
 /** @type {VotiveConfig} */
 const config = {
   sourceFolder: ".",
-  destinationFolder: "output"
+  targetFolder: "output"
 }
 
 startServer([], config)
