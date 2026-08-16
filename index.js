@@ -12,11 +12,6 @@ import { writeFileSync } from "node:fs"
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
 
-console.log("running")
-
-
-import clientScript from "./client.js"
-
 let cache
 
 function parseURL(url) {
@@ -49,6 +44,21 @@ function route(url) {
   if (!pathInfo.name) pathInfo.name = "index"
 
   return pathInfo
+}
+
+/**
+ * Finds the processor (if any) that both claims this extension and
+ * declares a `handlePreviewRequest` hook - multiple processors can share
+ * an extension for unrelated build-time reasons (e.g. a `readURL`-only
+ * processor), so matching on extension alone isn't enough to find the one
+ * voot actually wants here.
+ * @param {import("votive").VotiveConfig} config
+ * @param {string} extension
+ */
+function findProcessor(config, extension) {
+  return config.plugins
+    ?.flatMap(plugin => plugin.processors || [])
+    .find(processor => processor.extensions?.includes(extension) && processor.handlePreviewRequest)
 }
 
 /*
@@ -132,62 +142,28 @@ async function startServer(config) {
       }
     }
 
+    const contentType = mimeTypes[pathInfo.ext.toLowerCase()] || 'application/octet-stream'
 
-    // Unusued guard
-    if (req.method) {
-      // Sending dev assets
-      // if (pathInfo.ext && pathInfo.ext !== ".html" && false) {
-      //   const [url] = req.url.split("?")
-      //   return
-      //   const result = database.output.getOutputByURLPath(url)
-      //   if (result) {
-      //     res.writeHead(200, { 'Content-Type': 'text/plain', 'cache-control': 'no-store' })
-      //     res.end(result.data)
-      //   } else {
-      //     res.writeHead(404);
-      //     res.end();
-      //   }
-      // } else {
-      // const script = clientScript()
-      // const splitHTML = result.data.split("</head>")
-      // const injectedHTML = splitHTML.splice(1, 0, script)
-      // const joinedHTML = splitHTML.join("")
+    const stats = await checkFile(filePath)
 
-      const contentType = mimeTypes[pathInfo.ext.toLowerCase()] || 'application/octet-stream'
+    if (stats) {
+      res.writeHead(200, {
+        'Content-Type': contentType,
+        "cache-control": "no-store"
+      })
 
-      const stats = await checkFile(filePath)
-
-      if (stats) {
-        res.writeHead(200, {
-          'Content-Type': contentType,
-          // 'Content-Length': stats.size,
-          "cache-control": "no-store"
-        })
-
-        if (stats.size < 1024 * 1024) {
-          if (pathInfo.ext === ".html") {
-            const file = await readFile(filePath, "utf-8")
-            const fileSplit = file.split("</body>")
-            const script = await import("./client.js")
-            fileSplit.splice(1, 0, `<script>${script.default.toString()}\n\nopenSocket()</script>`)
-            const html = fileSplit.join("")
-            res.end(html)
-          } else {
-            const file = await readFile(filePath)
-            res.end(file)
-          }
-        } else {
-          fs.createReadStream(filePath).pipe(res)
-        }
+      if (stats.size < 1024 * 1024) {
+        const file = await readFile(filePath)
+        const processor = findProcessor(config, pathInfo.ext)
+        res.end(processor ? processor.handlePreviewRequest(file) : file)
       } else {
-        res.writeHead(404);
-        res.end();
-        // }
+        fs.createReadStream(filePath).pipe(res)
       }
+    } else {
+      res.writeHead(404);
+      res.end();
     }
   });
-
-  await queue()
 
   server.listen(8000, () => {
     if (config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
@@ -215,11 +191,25 @@ async function startServer(config) {
   })
 
   chokidar.watch(targetFolder, {})
-    .on("change", async (filePath, stats) => {
+    .on("change", async (filePath) => {
       if (config.logging === "verbose") console.info(`${styleText("dim", `watching:`)} ${styleText("yellow", "change " + filePath)}`)
-      const file = await readFile(filePath, "utf-8")
-      const targetPath = (new URL(filePath, "thismessage:/")).pathname
-      if (ws) ws.send(JSON.stringify({ message: "filechange", payload: { path: targetPath, data: file } }))
+      if (!ws) return
+
+      const targetPath = path.relative(targetFolder, filePath)
+      const target = cache.target.get(targetPath)
+      if (!target) return
+
+      // The database only stores a target's own text content if some
+      // processor's readFile/writeFile populated it (see the `data` column
+      // in createDatabase.js) - nothing does yet for html. Fall back to
+      // what's actually on disk so the client still has real content to
+      // work with, same source today's code always used.
+      const fileStats = await checkFile(filePath)
+      const data = target.data ?? (fileStats && fileStats.size < 1024 * 1024
+        ? await readFile(filePath, "utf-8").catch(() => null)
+        : null)
+
+      ws.send(JSON.stringify({ ...target, data }))
     })
 
   chokidar.watch(sourceFolder, {

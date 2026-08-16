@@ -21,28 +21,40 @@ export default function openSocket() {
   }
 
   socket.addEventListener('message', e => {
-    const data = JSON.parse(e.data)
-    if (data.message === "filechange" && isOpen()) {
-      if (data.payload) {
-        const regex = new RegExp(window.location.pathname + "(index)?(\.html)")
-        if (!data.payload.path.match(regex)) return
+    if (!isOpen()) return
 
-        const parser = new DOMParser()
-        const oldHead = parser.parseFromString(document.documentElement.outerHTML, "text/html").head.innerHTML
-        const newHead = parser.parseFromString(data.payload.data, "text/html").head.innerHTML
+    // Every "a target changed" message is the same shape: the target
+    // itself (see TargetOutput in votive/lib/createDatabase.js), not a
+    // bespoke per-content-type envelope - a plugin that wants to mutate
+    // what's served does that via handlePreviewRequest, not by inventing
+    // its own message shape here.
+    const target = JSON.parse(e.data)
 
-        if (oldHead !== newHead) {
-          location.reload()
-        } else {
-          const body = document.querySelector("body")
-          const newBody = document.createElement("body")
-          const content = data.payload.data.match(/<body.*?>([\\s\\S]*)/)
-          newBody.innerHTML = content[1]
-          body.replaceWith(newBody)
-        }
-      } else {
-        location.reload()
-      }
+    // Nothing here knows what a non-html target should do on change yet -
+    // that's each content type's own concern to add, same as html's own
+    // diff/patch logic below isn't generic.
+    if (target.extension !== ".html") return
+
+    const regex = new RegExp(window.location.pathname + "(index)?(\\.html)")
+    if (!("/" + target.path).match(regex)) return
+
+    if (!target.data) {
+      location.reload()
+      return
+    }
+
+    const parser = new DOMParser()
+    const oldHead = parser.parseFromString(document.documentElement.outerHTML, "text/html").head.innerHTML
+    const newHead = parser.parseFromString(target.data, "text/html").head.innerHTML
+
+    if (oldHead !== newHead) {
+      location.reload()
+    } else {
+      const body = document.querySelector("body")
+      const newBody = document.createElement("body")
+      const content = target.data.match(/<body.*?>([\s\S]*)/)
+      newBody.innerHTML = content[1]
+      body.replaceWith(newBody)
     }
   });
 }
