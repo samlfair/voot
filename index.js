@@ -297,6 +297,33 @@ async function handleCommand(ws, envelope, config, isNetworkFacing) {
 
 
 /**
+ * Tries `port`, and if it's already in use, retries on `port + 1` -
+ * repeating until a free port is found. `onListening` runs once, with
+ * whichever port actually ended up bound.
+ * @param {import("node:http").Server} server
+ * @param {number} port
+ * @param {string} host
+ * @param {(port: number) => void} onListening
+ */
+function listenOnAvailablePort(server, port, host, onListening) {
+  const handleError = (err) => {
+    if (err.code !== 'EADDRINUSE') throw err
+    server.removeListener('listening', handleListening)
+    listenOnAvailablePort(server, port + 1, host, onListening)
+  }
+
+  const handleListening = () => {
+    server.removeListener('error', handleError)
+    onListening(port)
+  }
+
+  server.once('error', handleError)
+  server.once('listening', handleListening)
+
+  server.listen(port, host)
+}
+
+/**
  * `host`: which interface to bind - defaults to loopback-only
  * ("127.0.0.1"). Passing anything else (most commonly "0.0.0.0", all
  * interfaces) opts into serving the LAN, and disables the write endpoint
@@ -349,12 +376,12 @@ async function startServer(config) {
     res.end()
   });
 
-  server.listen(8000, host, () => {
+  listenOnAvailablePort(server, 8000, host, (port) => {
     if (config.logging === "silent") return
-    console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`)
+    console.info(`${styleText("dim", "preview:")} ${styleText("cyan", `running on http://localhost:${port}`)}`)
     if (!isNetworkFacing) return
     for (const address of lanAddresses()) {
-      console.info(`${styleText("dim", "preview:")} ${styleText("cyan", `also on http://${address}:8000`)}`)
+      console.info(`${styleText("dim", "preview:")} ${styleText("cyan", `also on http://${address}:${port}`)}`)
     }
     console.info(`${styleText("dim", "preview:")} ${styleText("yellow", "write endpoint disabled while serving on the network")}`)
   });
