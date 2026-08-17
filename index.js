@@ -7,6 +7,7 @@ import { styleText } from "node:util"
 import fs from "fs"
 import mimeTypes from "./mime.js"
 import votive from "votive"
+import { cleanupDatabase } from "votive/internals"
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
 
@@ -200,6 +201,12 @@ async function startServer(config) {
 
   runDeferred(runBuffers, config)
   runDeferred(runFetches, config)
+
+  // A full stat() pass over every target - unlike runBuffers()/
+  // runFetches(), its cost doesn't shrink to ~0 when nothing changed, so
+  // this runs once at startup rather than on every edit (see
+  // cleanupDatabase.js for what it actually checks/fixes).
+  runDeferred(async () => cleanupDatabase(config, cache), config)
 
   const { sourceFolder, targetFolder } = config
   const server = http.createServer(async (req, res) => {
