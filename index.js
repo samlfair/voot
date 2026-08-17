@@ -47,11 +47,6 @@ function route(url) {
 }
 
 /**
- * Finds the processor (if any) that both claims this extension and
- * declares a `handlePreviewRequest` hook - multiple processors can share
- * an extension for unrelated build-time reasons (e.g. a `readURL`-only
- * processor), so matching on extension alone isn't enough to find the one
- * voot actually wants here.
  * @param {import("votive").VotiveConfig} config
  * @param {string} extension
  */
@@ -61,16 +56,6 @@ function findProcessor(config, extension) {
     .find(processor => processor.extensions?.includes(extension) && processor.handlePreviewRequest)
 }
 
-/*
-  runBuffers()/runFetches() do the slow part (analyzing a video, fetching
-  a URL) and then trigger their own rebuild once done - see wrapRunner in
-  votive/lib/bundle.js. That slow work never touches votive's build
-  queue, so firing it here and moving on immediately (not awaiting it)
-  never delays a foreground rebuild triggered by an unrelated file edit -
-  see tasks/voot-unawaited-deferred-race.md. Still fire-and-forget, so
-  errors need a .catch or a failed fetch/buffer would surface as an
-  unhandled rejection.
-*/
 function runDeferred(runner, config) {
   if (!runner) return
   runner().catch(e => {
@@ -78,7 +63,6 @@ function runDeferred(runner, config) {
   })
 }
 
-// async function startServer({ inputDir, cacheDir, plugins, database, outputDir }) {
 async function startServer(config) {
 
   const queue = await votive({ ...config, verbose: config.logging === "verbose" })
@@ -114,8 +98,6 @@ async function startServer(config) {
           ext: ".md",
           dir: parsedPath.dir
         })
-
-        /* FIXME this will fail if the parent is an md file rather than a folder */
 
         const written = await writeFile(formattedPath, `# ${formData.pagename}`, { encoding: "utf-8" })
       } else if (formData.action === "addfolder") {
@@ -199,11 +181,6 @@ async function startServer(config) {
       const target = cache.target.get(targetPath)
       if (!target) return
 
-      // The database only stores a target's own text content if some
-      // processor's readFile/writeFile populated it (see the `data` column
-      // in createDatabase.js) - nothing does yet for html. Fall back to
-      // what's actually on disk so the client still has real content to
-      // work with, same source today's code always used.
       const fileStats = await checkFile(filePath)
       const data = target.data ?? (fileStats && fileStats.size < 1024 * 1024
         ? await readFile(filePath, "utf-8").catch(() => null)
