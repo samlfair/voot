@@ -47,13 +47,17 @@ function route(url) {
 }
 
 /**
+ * Finds the processor (if any) that both claims `extension` and declares
+ * `hook` - multiple processors can share an extension for unrelated
+ * build-time reasons, so matching on extension alone isn't enough.
  * @param {VotiveConfig} config
  * @param {string} extension
+ * @param {"handlePreviewRequest" | "handlePreviewError"} hook
  */
-function findProcessor(config, extension) {
+function findProcessor(config, extension, hook) {
   return config.plugins
     ?.flatMap(plugin => plugin.processors || [])
-    .find(processor => processor.extensions?.includes(extension) && processor.handlePreviewRequest)
+    .find(processor => processor.extensions?.includes(extension) && processor[hook])
 }
 
 function runDeferred(runner, config) {
@@ -61,6 +65,32 @@ function runDeferred(runner, config) {
   runner().catch(e => {
     if (config.logging !== "silent") console.error(e)
   })
+}
+
+/**
+ * Serves an already-existing file with `status`, running its extension's
+ * handlePreviewRequest if one is registered. Shared by the normal-response
+ * and 404-fallback paths so they can't drift from each other - a
+ * fallback page (e.g. 404.html) goes through the exact same handling a
+ * normal page would, live-reload script injection included.
+ * @param {import("node:http").ServerResponse} res
+ * @param {string} filePath
+ * @param {string} extension
+ * @param {import("node:fs").Stats} stats
+ * @param {number} status
+ * @param {VotiveConfig} config
+ */
+async function respondWithFile(res, filePath, extension, stats, status, config) {
+  const contentType = mimeTypes[extension.toLowerCase()] || 'application/octet-stream'
+  res.writeHead(status, { 'Content-Type': contentType, "cache-control": "no-store" })
+
+  if (stats.size < 1024 * 1024) {
+    const file = await readFile(filePath)
+    const processor = findProcessor(config, extension, "handlePreviewRequest")
+    res.end(processor ? processor.handlePreviewRequest(file) : file)
+  } else {
+    fs.createReadStream(filePath).pipe(res)
+  }
 }
 
 /**
@@ -146,6 +176,19 @@ async function handleWrite(req, res, config) {
  * @returns {string | Buffer}
  */
 
+/**
+ * Called when the requested target doesn't exist on disk, letting a
+ * plugin supply a fallback target to serve instead - e.g. vowel's
+ * synthesized 404.html. The returned path is resolved and served through
+ * the exact same path a normal request takes (including running that
+ * target's own handlePreviewRequest, if it has one), just with a 404
+ * status instead of 200. Returning nothing (or a path that also doesn't
+ * exist) falls back to an empty 404 body.
+ * @callback HandlePreviewError
+ * @param {import("node:path").ParsedPath} pathInfo - the route that was requested but not found
+ * @returns {string | undefined}
+ */
+
 
 /**
  * @param {VotiveConfig & { handlePreviewRequest: HandlePreviewRequest }} config 
@@ -164,31 +207,22 @@ async function startServer(config) {
 
     const pathInfo = route(req.url)
     const filePath = path.join(targetFolder, path.format(pathInfo))
-
-    const contentType = mimeTypes[pathInfo.ext.toLowerCase()] || 'application/octet-stream'
-
     const stats = await checkFile(filePath)
 
-    if (stats) {
-      res.writeHead(200, {
-        'Content-Type': contentType,
-        "cache-control": "no-store"
-      })
+    if (stats) return respondWithFile(res, filePath, pathInfo.ext, stats, 200, config)
 
-      if (stats.size < 1024 * 1024) {
-        const file = await readFile(filePath)
-        const processor = findProcessor(config, pathInfo.ext)
-        res.end(processor ? processor.handlePreviewRequest(file) : file)
-      } else {
-        fs.createReadStream(filePath).pipe(res)
-      }
-    } else {
-      res.writeHead(404);
-      res.end();
-    }
+    const errorProcessor = findProcessor(config, pathInfo.ext, "handlePreviewError")
+    const fallbackPath = errorProcessor?.handlePreviewError(pathInfo)
+    const fallbackFilePath = fallbackPath && path.join(targetFolder, fallbackPath)
+    const fallbackStats = fallbackFilePath && await checkFile(fallbackFilePath)
+
+    if (fallbackStats) return respondWithFile(res, fallbackFilePath, path.extname(fallbackPath), fallbackStats, 404, config)
+
+    res.writeHead(404)
+    res.end()
   });
 
-  server.listen(8000, () => {
+  server.listen(8000, '0.0.0.0', () => {
     if (config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
   });
 
