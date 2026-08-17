@@ -1,4 +1,5 @@
 import http from 'node:http';
+import os from "node:os"
 import path from "node:path"
 import { stat, writeFile, readFile, mkdir } from "node:fs/promises"
 import WebSocket from "faye-websocket"
@@ -68,6 +69,14 @@ function runDeferred(runner, config) {
   })
 }
 
+/** @returns {string[]} every non-internal IPv4 address this machine has */
+function lanAddresses() {
+  return Object.values(os.networkInterfaces())
+    .flat()
+    .filter(address => address && address.family === "IPv4" && !address.internal)
+    .map(address => address.address)
+}
+
 /**
  * Serves an already-existing file with `status`, running its extension's
  * handlePreviewRequest if one is registered. Shared by the normal-response
@@ -130,6 +139,15 @@ function resolveSourcePath(sourceFolder, filePath) {
  * own sourceFolder watcher (see the chokidar.watch(sourceFolder, ...)
  * below) picks up the result the same way it picks up any other edit, so
  * there's no separate rebuild trigger to call here.
+ *
+ * Only ever reachable when the server is loopback-only - see
+ * isNetworkFacing in startServer(). Writing arbitrary files under
+ * sourceFolder with zero auth is fine when the only thing that can reach
+ * this port is something already running on the same machine; it stops
+ * being fine the moment the server is reachable from the LAN. Rather than
+ * add real auth, the two capabilities are just mutually exclusive for now
+ * (tasks/local-network-serving.md) - network access disables this
+ * endpoint entirely instead of leaving it exposed.
  * @param {import("node:http").IncomingMessage} req
  * @param {import("node:http").ServerResponse} res
  * @param {VotiveConfig} config
@@ -192,9 +210,17 @@ async function handleWrite(req, res, config) {
 
 
 /**
- * @param {VotiveConfig & { handlePreviewRequest: HandlePreviewRequest }} config 
+ * `host`: which interface to bind - defaults to loopback-only
+ * ("127.0.0.1"). Passing anything else (most commonly "0.0.0.0", all
+ * interfaces) opts into serving the LAN, and disables the write endpoint
+ * for as long as the server runs - see handleWrite's doc comment and
+ * isNetworkFacing below.
+ * @param {VotiveConfig & { handlePreviewRequest: HandlePreviewRequest, host?: string }} config
  */
 async function startServer(config) {
+
+  const host = config.host || "127.0.0.1"
+  const isNetworkFacing = host !== "127.0.0.1" && host !== "localhost"
 
   const queue = await votive({ ...config, verbose: config.logging === "verbose" })
   let { cache, runBuffers, runFetches } = await queue()
@@ -210,7 +236,14 @@ async function startServer(config) {
 
   const { sourceFolder, targetFolder } = config
   const server = http.createServer(async (req, res) => {
-    if (req.method === 'POST') return handleWrite(req, res, config)
+    if (req.method === 'POST') {
+      if (isNetworkFacing) {
+        res.writeHead(403, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "the write endpoint is disabled while serving on the network" }))
+        return
+      }
+      return handleWrite(req, res, config)
+    }
 
     const pathInfo = route(req.url)
     const filePath = path.join(targetFolder, path.format(pathInfo))
@@ -229,8 +262,14 @@ async function startServer(config) {
     res.end()
   });
 
-  server.listen(8000, '0.0.0.0', () => {
-    if (config.logging !== "silent") console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`);
+  server.listen(8000, host, () => {
+    if (config.logging === "silent") return
+    console.info(`${styleText("dim", "preview:")} ${styleText("cyan", "running on http://localhost:8000")}`)
+    if (!isNetworkFacing) return
+    for (const address of lanAddresses()) {
+      console.info(`${styleText("dim", "preview:")} ${styleText("cyan", `also on http://${address}:8000`)}`)
+    }
+    console.info(`${styleText("dim", "preview:")} ${styleText("yellow", "write endpoint disabled while serving on the network")}`)
   });
 
   let ws
