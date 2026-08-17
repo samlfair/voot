@@ -62,6 +62,52 @@ function findProcessor(config, extension, hook) {
     .find(processor => processor.extensions?.includes(extension) && processor[hook])
 }
 
+/**
+ * A named action a plugin registers on its top-level `commands` object
+ * (sibling to `processors`, not nested under one - a command isn't
+ * scoped to a file extension). `notify` pushes a progress update back to
+ * whoever triggered the command; a synchronous or single-step command
+ * can just never call it. See tasks/deploy-hook.md for the design this
+ * came out of.
+ * @callback CommandHandler
+ * @param {any} payload
+ * @param {{ config: VotiveConfig, notify: (message: object) => void }} context
+ * @returns {Promise<any> | any}
+ */
+
+/**
+ * Finds a registered command by name across every plugin - same
+ * flattening findProcessor does for processors, one level up (commands
+ * aren't extension-scoped).
+ * @param {VotiveConfig} config
+ * @param {string} name
+ * @returns {CommandHandler | undefined}
+ */
+function findCommand(config, name) {
+  return config.plugins
+    ?.flatMap(plugin => plugin.commands ? Object.entries(plugin.commands) : [])
+    .find(([commandName]) => commandName === name)
+    ?.[1]
+}
+
+/**
+ * Runs a registered command directly - no server, no WS, no browser
+ * required. This is the whole point of commands being "just a function
+ * a plugin registered": a CLI entry point can call this directly for a
+ * one-shot/CI use (e.g. an automated deploy), reusing the exact same
+ * handler a live "Publish" button in a GUI would trigger over WS (see
+ * handleCommand below) - two invocation paths, one implementation.
+ * @param {VotiveConfig} config
+ * @param {string} name
+ * @param {any} payload
+ * @param {(message: object) => void} [notify]
+ */
+async function runCommand(config, name, payload, notify = () => {}) {
+  const handler = findCommand(config, name)
+  if (!handler) throw new Error(`No command registered: "${name}"`)
+  return handler(payload, { config, notify })
+}
+
 function runDeferred(runner, config) {
   if (!runner) return
   runner().catch(e => {
@@ -190,6 +236,47 @@ async function handleWrite(req, res, config) {
 }
 
 /**
+ * Dispatches one `{ action: "command", id, command, payload }` WS message:
+ * runs the named command (see runCommand) and streams the result back
+ * over the same socket, `id` threaded through every frame so a client
+ * with more than one command in flight (or just several clicks) can tell
+ * which response belongs to which request.
+ *
+ * Same caution as handleWrite, arguably more: a command can do anything
+ * a plugin author wired it to do, including something as consequential
+ * as a production deploy - disabled while network-facing for the exact
+ * same reason (tasks/local-network-serving.md, tasks/deploy-hook.md).
+ *
+ * No concurrency handling here on purpose - if the same command (or two
+ * different ones) can't safely run at once, that's the command's own
+ * problem to guard against, not something votive/voot assumes on a
+ * plugin author's behalf.
+ * @param {import("faye-websocket").WebSocket} ws
+ * @param {{ id: any, command: string, payload: any }} envelope
+ * @param {VotiveConfig} config
+ * @param {boolean} isNetworkFacing
+ */
+async function handleCommand(ws, envelope, config, isNetworkFacing) {
+  const { id, command, payload } = envelope
+
+  function send(frame) {
+    ws.send(JSON.stringify({ id, ...frame }))
+  }
+
+  if (isNetworkFacing) {
+    send({ status: "error", message: "commands are disabled while serving on the network" })
+    return
+  }
+
+  try {
+    const data = await runCommand(config, command, payload, send)
+    send({ status: "ok", data })
+  } catch (e) {
+    send({ status: "error", message: e?.message || String(e) })
+  }
+}
+
+/**
  * @callback HandlePreviewRequest
  * @param {Buffer} body - the raw file content as read from disk
  * @returns {string | Buffer}
@@ -279,7 +366,19 @@ async function startServer(config) {
 
     if (WebSocket.isWebSocket(req)) {
       ws.on('message', (e) => {
-        if (e.data = "opened") {
+        let envelope
+        try {
+          envelope = JSON.parse(e.data)
+        } catch (err) {
+          envelope = null
+        }
+
+        if (envelope && envelope.action === "command") {
+          handleCommand(ws, envelope, config, isNetworkFacing)
+          return
+        }
+
+        if (e.data === "opened") {
           if (config.logging === "verbose") console.info(`${styleText("dim", "preview: ")} ${styleText("cyan", "connection opened")}`)
         } else {
           ws.send("Message received")
@@ -335,3 +434,4 @@ async function startServer(config) {
 
 
 export default startServer
+export { runCommand }
