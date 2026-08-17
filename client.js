@@ -1,6 +1,6 @@
 export default function openSocket() {
   console.info("Socket opened")
-  const socket = new WebSocket('ws://localhost:8000');
+  const socket = new WebSocket(`ws://${window.location.host}`);
   socket.addEventListener('open', () => {
     socket.send('opened')
   });
