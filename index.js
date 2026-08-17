@@ -1,5 +1,4 @@
 import http from 'node:http';
-import queryString from 'node:querystring'
 import path from "node:path"
 import { stat, writeFile, readFile, mkdir } from "node:fs/promises"
 import WebSocket from "faye-websocket"
@@ -8,9 +7,10 @@ import { styleText } from "node:util"
 import fs from "fs"
 import mimeTypes from "./mime.js"
 import votive from "votive"
-import { writeFileSync } from "node:fs"
 import { pipeline } from 'node:stream/promises'
 import { Writable } from 'node:stream'
+
+/** @import {VotiveConfig} from "votive" */
 
 let cache
 
@@ -47,7 +47,7 @@ function route(url) {
 }
 
 /**
- * @param {import("votive").VotiveConfig} config
+ * @param {VotiveConfig} config
  * @param {string} extension
  */
 function findProcessor(config, extension) {
@@ -63,6 +63,93 @@ function runDeferred(runner, config) {
   })
 }
 
+/**
+ * @param {import("node:http").IncomingMessage} req
+ */
+async function readJSONBody(req) {
+  const chunks = []
+  await pipeline(req, new Writable({
+    write(chunk, _, cb) {
+      chunks.push(chunk)
+      cb()
+    }
+  }))
+  return JSON.parse(Buffer.concat(chunks).toString())
+}
+
+/**
+ * Resolves `filePath` against `sourceFolder`, rejecting anything that
+ * would escape it - a leading `../`, a `../` buried in the middle, or an
+ * absolute path (which `path.resolve` would otherwise happily let
+ * override the base entirely).
+ * @param {string} sourceFolder
+ * @param {string} filePath
+ * @returns {string | null}
+ */
+function resolveSourcePath(sourceFolder, filePath) {
+  const root = path.resolve(sourceFolder)
+  const resolved = path.resolve(root, filePath)
+  if (resolved !== root && !resolved.startsWith(root + path.sep)) return null
+  return resolved
+}
+
+/**
+ * Generic write endpoint for plugin clients: `{ type: "file" | "folder",
+ * filePath: string, data?: string }`. Writes go straight to disk - votive's
+ * own sourceFolder watcher (see the chokidar.watch(sourceFolder, ...)
+ * below) picks up the result the same way it picks up any other edit, so
+ * there's no separate rebuild trigger to call here.
+ * @param {import("node:http").IncomingMessage} req
+ * @param {import("node:http").ServerResponse} res
+ * @param {VotiveConfig} config
+ */
+async function handleWrite(req, res, config) {
+  function fail(status, error) {
+    res.writeHead(status, { "Content-Type": "application/json" })
+    res.end(JSON.stringify({ error }))
+  }
+
+  let payload
+  try {
+    payload = await readJSONBody(req)
+  } catch (e) {
+    return fail(400, "invalid JSON body")
+  }
+
+  const { type, filePath, data } = payload || {}
+
+  if (type !== "file" && type !== "folder") return fail(400, 'type must be "file" or "folder"')
+  if (typeof filePath !== "string" || !filePath) return fail(400, "filePath is required")
+
+  const resolved = resolveSourcePath(config.sourceFolder, filePath)
+  if (!resolved) return fail(403, "filePath must stay within sourceFolder")
+
+  try {
+    if (type === "folder") {
+      await mkdir(resolved, { recursive: true })
+    } else {
+      await mkdir(path.dirname(resolved), { recursive: true })
+      await writeFile(resolved, data ?? "", { encoding: "utf-8" })
+    }
+  } catch (e) {
+    console.error(e)
+    return fail(500, "write failed")
+  }
+
+  res.writeHead(200, { "Content-Type": "application/json" })
+  res.end(JSON.stringify({ path: path.relative(config.sourceFolder, resolved) }))
+}
+
+/**
+ * @callback HandlePreviewRequest
+ * @param {Buffer} body - the raw file content as read from disk
+ * @returns {string | Buffer}
+ */
+
+
+/**
+ * @param {VotiveConfig & { handlePreviewRequest: HandlePreviewRequest }} config 
+ */
 async function startServer(config) {
 
   const queue = await votive({ ...config, verbose: config.logging === "verbose" })
@@ -73,56 +160,10 @@ async function startServer(config) {
 
   const { sourceFolder, targetFolder } = config
   const server = http.createServer(async (req, res) => {
-    const now = performance.now() % 100
+    if (req.method === 'POST') return handleWrite(req, res, config)
+
     const pathInfo = route(req.url)
-
     const filePath = path.join(targetFolder, path.format(pathInfo))
-    if (req.method === 'POST') {
-
-      const chunks = []
-      await pipeline(req, new Writable({
-        write(chunk, _, cb) {
-          chunks.push(chunk)
-          cb()
-        }
-      }))
-
-      const body = Buffer.concat(chunks).toString()
-      const formData = queryString.parse(body)
-      const refererPath = (new URL(req.headers.referer)).pathname.slice(1)
-      if (formData.action === "addpage") {
-        const parsedPath = path.parse(path.join(refererPath, formData.pagename))
-
-        const formattedPath = path.format({
-          name: formData.pagename || "untitled",
-          ext: ".md",
-          dir: parsedPath.dir
-        })
-
-        const written = await writeFile(formattedPath, `# ${formData.pagename}`, { encoding: "utf-8" })
-      } else if (formData.action === "addfolder") {
-        const parsedPath = path.normalize(path.join(refererPath, formData.foldername || "untitled"))
-
-        const dirs = parsedPath.split(path.sep)
-
-        for (const [index, segment] of dirs.entries()) {
-          const dir = path.join(...dirs.slice(0, index + 1))
-          try {
-            const stats = await stat(dir)
-            if (stats.isFile) throw new Error()
-          } catch (e) {
-            try {
-              await mkdir(dir, { recursive: true })
-            } catch (e) {
-              console.error(e)
-            }
-          }
-        }
-
-        const homePath = path.join(parsedPath, "home.md")
-        await writeFile(homePath, `# ${formData.foldername}`, { encoding: "utf-8" })
-      }
-    }
 
     const contentType = mimeTypes[pathInfo.ext.toLowerCase()] || 'application/octet-stream'
 
