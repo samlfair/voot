@@ -433,7 +433,7 @@ async function startServer(config) {
         ? await readFile(filePath, "utf-8").catch(() => null)
         : null)
 
-      ws.send(JSON.stringify({ ...target, data }))
+      ws && ws.send(JSON.stringify({ ...target, data }))
     })
 
   chokidar.watch(sourceFolder, {
